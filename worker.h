@@ -6,8 +6,7 @@ struct Sys_Time {
 };
 typedef struct msgbuffer {
 	long mtype;
-	int address;
-        int offset;	
+        int address;	
 	int action;
 	int workerID;
 } msgbuffer;
@@ -21,7 +20,7 @@ void DisposeAccessToShm(struct Sys_Time* clock);
 int AccessMsgQueue();
 
 
-void SendRequest(int msqid, msgbuffer *msg, int address,int offset, int requestAction);
+void SendRequest(int msqid, msgbuffer *msg, int address, int requestAction);
 
 
 void GetResponse(int msqid, msgbuffer *msg);

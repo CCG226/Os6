@@ -1,5 +1,37 @@
 #include <sys/types.h>
 #include <stdio.h>
+
+#define PAGE_SIZE 32
+
+const int FRAME_TABLE_SIZE = 256;
+
+const int PAGE_TABLE_SIZE = 32;
+
+const int STATE_BLOCKED = 2;
+//worker state running
+const int STATE_RUNNING = 1;
+//worker state terminated
+const int STATE_TERMINATED = 0;
+//table size of process table
+const int TABLE_SIZE = 100;
+//time statics 
+const int HALF_SEC = 500000000;
+
+const int FULLFILLMENT_TIME = 14000000;
+
+const int MAX_NANOSECOND = 1000000000;
+
+//shrd memory and msg queue key
+const int MSG_SYSTEM_KEY = 5303;
+
+const int SYS_TIME_SHARED_MEMORY_KEY = 63131;
+
+const int WAIT_TABLE_SIZE = 20;
+
+const int MEM_SLOT_EMPTY = 0;
+
+const int MEM_SLOT_FILLED = 1;
+
 //represents shared memory Operating system clock
 struct Sys_Time {
 	int seconds;//current second
@@ -12,33 +44,46 @@ struct PCB {
 	pid_t pid; //worker process id
 	int startSeconds;//second launched
 	int startNano; //nanosecond launched
+	int page[PAGE_SIZE];
 };
 //message data sent through message queue
 typedef struct msgbuffer {
 	long mtype;
 	int address;
-        int offset;	
 	int action;
 	int workerID;
 } msgbuffer;
 
+typedef struct frame {
+	int occupied;
+	int pageAddress;
+	int owner;
+	int dirtyBit;
+} frame;
 
-const int STATE_BLOCKED = 3;
-//worker state running
-const int STATE_RUNNING = 1;
-//worker state terminated
-const int STATE_TERMINATED = 0;
-//table size of process table
-const int TABLE_SIZE = 100;
-//time statics 
-const int HALF_SEC = 500000000;
+int MoveFrameHead(int oldHead);
 
-const int MAX_NANOSECOND = 1000000000;
+void SwapOut(frame frameTable[], int* head);
 
-//shrd memory and msg queue key
-const int MSG_SYSTEM_KEY = 5303;
+void BuildBlockedQueue(frame waitList[]);
 
-const int SYS_TIME_SHARED_MEMORY_KEY = 63131;
+void BuildPageTable(struct PCB table[]);
+
+void BuildFrameTable(frame frameTable[]);
+
+int CalculatePageAddress(int address);
+
+int Pager(struct PCB processTable[],frame frameTable[],int address,int workerID);
+
+void UpdateProcessPageTable(int workerIndex, struct PCB table[],int pageAddress, int memorySlotState);
+
+void UpdateFrameTable(int frameIndex, int pageAddress, int workerID, frame table[]);
+
+void PrintFrameTable(int head, frame frameTable[], int curTimeSeconds, int curTimeNanoseconds, FILE* logger);
+
+
+int AlterDirtyBit(frame frameTable[],int dirtyBit,int workerID, int pageAddress);
+
 
 //help information
 void Help();
@@ -62,6 +107,8 @@ void StopSystemClock(struct Sys_Time *Clock, int sharedMemoryId);
 //increments clock based on incRate
 void RunSystemClock(struct Sys_Time *Clock, int incRate);
 
+void FastForwardClock(struct Sys_Time *Clock,int ffSec,int ffNano);
+
 //handles how many workers are laucnhed,if its time to launch a new worker as well as if its ok too
 //runs the system clock
 //prints process table and handles logger
@@ -69,7 +116,7 @@ void RunSystemClock(struct Sys_Time *Clock, int incRate);
 //updates process table info
 //handles response messages from workers after they run
 //workAmount = n value, workerSimLimit = -s value, timeInterval = -t value, logFile = -f value, OsClock = shared memory clock, table is process pcb table 
-void WorkerHandler(int workerAmount, int workerSimLimit, int timeInterval,char* logFile, struct Sys_Time* OsClock, struct PCB table[]);
+void WorkerHandler(int workerAmount, int workerSimLimit, int timeInterval,char* logFile, struct Sys_Time* OsClock, struct PCB table[], frame frameTable[]);
 //logs a particular message to logfile 
 int LogMessage(FILE* logger, const char* format,...);
 
@@ -101,6 +148,8 @@ int CanEvent(int curSec,int curNano,int eventSecMark,int eventNanoMark);
 int ConstructMsgQueue();
 
 void DestructMsgQueue(int msqid);
+
+int AreAllWorkersBlocked(struct PCB table[]);
 
 int RequestHandler(int msqid, msgbuffer *msg);
 void ResponseHandler(int msqid, int workerId, msgbuffer *msg);

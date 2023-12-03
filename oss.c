@@ -60,6 +60,16 @@ int main(int argc, char** argv)
 	//assigns default values to processtable elements (constructor)
 	BuildProcessTable(processTable);
 
+	BuildPageTable(processTable);
+
+	frame waitList[WAIT_TABLE_SIZE];
+
+	BuildBlockedQueue(waitList);
+
+	frame frameTable[FRAME_TABLE_SIZE];
+
+	BuildFrameTable(frameTable);
+
 	//stores shared memory system clock info (seconds passed, nanoseconds passed, clock speed(rate))
 	struct Sys_Time *OS_Clock;
 
@@ -80,7 +90,7 @@ int main(int argc, char** argv)
 	shm_ClockId = StartSystemClock(&OS_Clock);
 
 	//handles how os laumches, tracks, and times workers
-	WorkerHandler(workerAmount, simultaneousLimit, timeInterval,logFileName, OS_Clock, processTable);
+	WorkerHandler(workerAmount, simultaneousLimit, timeInterval,logFileName, OS_Clock, processTable, frameTable);
 	//removes system clock from shared mem
 	StopSystemClock(OS_Clock ,shm_ClockId);
 	printf("\n\n\n");
@@ -182,7 +192,11 @@ void RunSystemClock(struct Sys_Time *Clock, int incRate) {
 
 
 }
-
+void FastForwardClock(struct Sys_Time *Clock,int ffSec,int ffNano)
+{
+Clock->seconds = ffSec;
+Clock->nanoseconds = ffNano;
+}
 
 void ArgumentParser(int argc, char** argv,  int* workerSimLimit, int* timeInterval, char** fileName) {
 	//assigns argument values to workerAmount, simultaneousLimit, workerArg variables in main using ptrs 
@@ -197,7 +211,8 @@ void ArgumentParser(int argc, char** argv,  int* workerSimLimit, int* timeInterv
 				Help();
 				break;
 			case 'n'://if -n int_value
-				tempIgnore = atoi(optarg);
+				printf("n argument has been depricated. default amount of workers is 100. Do NOT use -n\n");
+				exit(1);
 				break;
 			case 's'://if -s int_value
 				*(workerSimLimit) = atoi(optarg);
@@ -230,7 +245,7 @@ int ValidateInput(int workerAmount, int workerSimLimit, int timeInterval, char* 
 {
 	//acts a bool	
 	int isValid = 0;
-
+	printf("file: %s, s: %d, t: %d", fileName, workerSimLimit, timeInterval);
 	FILE* tstPtr = fopen(fileName, "w");
 	//if file fails to open then throw error
 	//likely invald extension
@@ -241,12 +256,12 @@ int ValidateInput(int workerAmount, int workerSimLimit, int timeInterval, char* 
 	}
 	fclose(tstPtr);
 	//arguments cant be negative 
-	if(workerAmount < 0 || workerSimLimit < 0 || timeInterval < 0)
+	if(/*workerAmount < 0 ||*/ workerSimLimit < 0 || timeInterval < 0)
 	{
 		printf("\nInput Arguments Cannot Be Negative Number!\n");	 
 		isValid = 1;	
 	}
-	//args cant be zero
+/*	//args cant be zero
 	if(workerAmount < 1)
 	{
 		printf("\nNo Workers To Launch!\n");
@@ -257,7 +272,7 @@ int ValidateInput(int workerAmount, int workerSimLimit, int timeInterval, char* 
 	{
 		printf("\nTo many Workers!\n");
 		isValid = 1;
-	}
+	}*/
 	//need to launch 1 worker at a time mun
 	if(workerSimLimit < 1)
 	{
@@ -325,7 +340,124 @@ int LogMessage(FILE* logger, const char* format,...)
 
 	return 0;
 }
-void WorkerHandler(int workerAmount, int workerSimLimit,int timeInterval, char* logFile, struct Sys_Time* OsClock, struct PCB processTable[])
+int CalculatePageAddress(int address)
+{
+int pAddr;	
+if(address < 1000)
+{
+pAddr = 0;
+}
+else if(address > 32000)
+{
+pAddr = 31;
+}
+else
+{
+pAddr = address / 1000;
+}
+return pAddr;
+}
+int Pager(struct PCB processTable[],frame frameTable[],int address,int workerID)
+{
+
+ for(int i = 0; i < FRAME_TABLE_SIZE; i++)
+ {
+  if((frameTable[i].pageAddress == address) && (frameTable[i].owner == workerID))
+  {
+   return 0;
+  }
+ }	 
+ for(int i = 0; i < FRAME_TABLE_SIZE; i++)
+ {
+  if(frameTable[i].occupied == 0)
+  {
+   UpdateFrameTable(i, address, workerID, frameTable); 	  
+   UpdateProcessPageTable(GetWorkerIndexFromProcessTable(processTable,workerID),processTable,address, MEM_SLOT_FILLED); 
+   return 0;	   	   
+  }
+
+
+ }
+
+ return 1; 
+}
+void UpdateProcessPageTable(int workerIndex, struct PCB table[],int pageAddress, int memorySlotState)
+{
+for(int i = 0; i < PAGE_TABLE_SIZE;i++)
+{
+ if(i == pageAddress)
+ {
+	 
+  table[workerIndex].page[i] = memorySlotState;	
+ }
+}
+
+}
+void UpdateFrameTable(int frameIndex, int pageAddress, int workerID, frame table[])
+{
+table[frameIndex].occupied = 1;
+table[frameIndex].pageAddress = pageAddress;
+table[frameIndex].owner = workerID;
+}
+int AlterDirtyBit(frame frameTable[],int dirtyBit,int workerID,int pageAddress)
+{
+if(dirtyBit == 0)
+{
+return 0;
+}	
+for(int i = 0; i < FRAME_TABLE_SIZE;i++)
+{
+ if((frameTable[i].pageAddress == pageAddress) && (frameTable[i].owner == workerID))
+ {
+  if(frameTable[i].dirtyBit == 0)
+  {
+  frameTable[i].dirtyBit = 1;
+  }
+
+ }
+
+}
+return 1;
+}
+int MoveFrameHead(int oldHead)
+{
+int newHead = oldHead;	
+if(oldHead == (FRAME_TABLE_SIZE - 1))
+{
+newHead = 0;
+}
+else
+{
+newHead++;
+}
+
+return newHead;
+}
+void SwapOut(frame frameTable[], int* head)
+{
+for(int i = 0; i < FRAME_TABLE_SIZE;i++)
+{
+if(frameTable[*(head)].occupied == 0)
+{
+ *(head) = MoveFrameHead(*(head));
+
+}
+else
+{
+int index = *(head);	
+frameTable[index].occupied = 0;
+ frameTable[index].pageAddress = -1;
+ frameTable[index].owner = 0;
+frameTable[index].dirtyBit = 0;
+break;
+
+}
+}
+*(head) = MoveFrameHead(*(head));
+
+}
+
+void WorkerHandler(int workerAmount, int workerSimLimit,int timeInterval, char* logFile, struct Sys_Time* OsClock, struct PCB processTable[], frame frameTable[])
 {	//access logfile
 	FILE *logger = fopen(logFile, "w");
 	//get id of message queue after creating it
@@ -349,10 +481,16 @@ void WorkerHandler(int workerAmount, int workerSimLimit,int timeInterval, char* 
 	int timeToOutputNano = 0;
 	//calcualtes time to print table for timeToOutput varables
 	GenerateTimeToEvent(OsClock->seconds, OsClock->nanoseconds,HALF_SEC,0, &timeToOutputSec, &timeToOutputNano);
+	
+	int timeToFullFillSec = 0;
+	int timeToFullFillNano = 0;
+	GenerateTimeToEvent(OsClock->seconds, OsClock->nanoseconds,FULLFILLMENT_TIME,0,&timeToFullFillSec, &timeToFullFillNano); 
 
 	msgbuffer msg;
 	
-
+		
+	int frameTableHead = 0;
+	int waitListHead = 0;
 	//keep looping until all workers (-n) have finished working
 	while(workersComplete != workerAmount)
 	{
@@ -383,18 +521,54 @@ void WorkerHandler(int workerAmount, int workerSimLimit,int timeInterval, char* 
 		//if 1/2 second passed, print process table
 		if(CanEvent(OsClock->seconds,OsClock->nanoseconds, timeToOutputSec, timeToOutputNano) == 1)
 		{
-					PrintProcessTable(processTable, OsClock->seconds, OsClock->nanoseconds,logger);
+					
+		//	PrintProcessTable(processTable, OsClock->seconds, OsClock->nanoseconds,logger);
+	
+			PrintFrameTable(0,frameTable,  OsClock->seconds, OsClock->nanoseconds,logger);
+
 			GenerateTimeToEvent(OsClock->seconds, OsClock->nanoseconds,HALF_SEC,0, &timeToOutputSec, &timeToOutputNano);
 		}
 
+		if(CanEvent(OsClock->seconds, OsClock->nanoseconds, timeToFullFillSec, timeToFullFillNano) == 1)
+		{
+			SwapOut(frameTable, &frameTableHead);
+			
+			GenerateTimeToEvent(OsClock->seconds, OsClock->nanoseconds,FULLFILLMENT_TIME,0,&timeToFullFillSec, &timeToFullFillNano); 
 
+		}
 		//send and recieve message to specific worker. returns amount of time worker ran and possibly amount of time it must be blocked for
 		int gotMsg = RequestHandler(msqid,&msg);	
 
 		if(gotMsg == 1)
 		{//if we got a worker message
+
+		int pageAddress = CalculatePageAddress(msg.address);
+
+		int pageFault =	Pager(processTable, frameTable, pageAddress, msg.workerID);
+		if(pageFault == 0)
+		{
+		RunSystemClock(OsClock, 100); 
+		int didAlterOccur = AlterDirtyBit(frameTable, msg.action, msg.workerID, pageAddress);	
+		
+		if(didAlterOccur == 1)
+		{
+	
+	  
+		RunSystemClock(OsClock, 500000);
+
+		}
+
+		}
+		if(pageFault == 1)
+		{
+		//block
+		}
+	//	printf("page fault %d\n",pageFault);	
 		ResponseHandler(msqid, msg.workerID, &msg);
 	
+	
+
+			
 		}		
 	
 		//await that worker toterminate and get its pid
@@ -413,7 +587,12 @@ void WorkerHandler(int workerAmount, int workerSimLimit,int timeInterval, char* 
 			workersInSystem--;
 
 		}		
-		RunSystemClock(OsClock, 500000);
+		if(AreAllWorkersBlocked(processTable) == 1)
+		{
+		 FastForwardClock(OsClock,timeToFullFillSec, timeToFullFillNano); 
+		}
+
+	       	RunSystemClock(OsClock, 500000);
 	}
 
 	Report(processTable);
@@ -531,7 +710,17 @@ int GetWorkerIndexFromProcessTable(struct PCB table[], pid_t workerId)
 	while(1)
 	{}
 }
-
+int AreAllWorkersBlocked(struct PCB table[])
+{
+ for(int i = 0; i < TABLE_SIZE;i++)
+ {
+  if(table[i].state == 1)
+  {
+  	return 0;
+  }	  
+ }
+	return 1;
+}
 void AddWorkerToProcessTable(struct PCB table[], pid_t workerId, int secondsCreated, int nanosecondsCreated)
 {
 	for(int i = 0; i < TABLE_SIZE; i++)
@@ -574,7 +763,58 @@ void BuildProcessTable(struct PCB table[])
 	}	
 
 }	
+void BuildBlockedQueue(frame waitList[])
+{
+ for(int i = 0; i < WAIT_TABLE_SIZE;i++)
+ {
+  
+ waitList[i].occupied = 0;
+ waitList[i].pageAddress = -1;
+ waitList[i].owner = 0;
+ waitList[i].dirtyBit = 0;
+ 
+ }
+}
+void BuildPageTable(struct PCB table[])
+{
+	
+ for(int i = 0; i < TABLE_SIZE;i++)
+ {	 
+ for(int j = 0; j < PAGE_TABLE_SIZE;j++)
+ {
+ table[i].page[j] = MEM_SLOT_EMPTY;
+ }
+ 
+ }
 
+}
+void BuildFrameTable(frame frameTable[])
+{
+
+for(int i = 0; i < FRAME_TABLE_SIZE;i++)
+{
+ frameTable[i].occupied = 0;
+ frameTable[i].pageAddress = -1;
+ frameTable[i].owner = 0;
+frameTable[i].dirtyBit = 0;
+}
+}
+void PrintFrameTable(int head, frame frameTable[], int curTimeSeconds, int curTimeNanoseconds, FILE* logger)
+{
+ LogMessage(logger,"Current memory layout at time %d:%d is:\n", curTimeSeconds, curTimeNanoseconds);
+  LogMessage(logger,"Current head: %d\n", head);
+  LogMessage(logger,"    Occupied    Address     Owner    DirtyBit \n");
+
+ printf("Current memory layout at time %d:%d is:\n", curTimeSeconds, curTimeNanoseconds);
+ printf("Current head: %d\n", head);
+printf("    Occupied    Address     Owner    DirtyBit \n");
+ for(int i = 0 ; i < FRAME_TABLE_SIZE; i++)
+ {
+  LogMessage(logger,"%d       %d        %d       %d       %d\n", i, frameTable[i].occupied, frameTable[i].pageAddress, frameTable[i].owner, frameTable[i].dirtyBit);
+ 
+ printf("%d       %d        %d       %d       %d\n", i, frameTable[i].occupied, frameTable[i].pageAddress, frameTable[i].owner, frameTable[i].dirtyBit);
+ }
+}
 //pirnt table
 void PrintProcessTable(struct PCB processTable[],int curTimeSeconds, int curTimeNanoseconds, FILE* logger)
 { //printing 

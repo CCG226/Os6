@@ -78,12 +78,12 @@ void TaskHandler(int workerResources[])
 			//by defualt release
 			int action = MemoryAction();
 
-			int address = GetAddress();
+			int addressSlot = GetAddress();
 			
-			int offset = GetOffset(address);
+			int address = GetOffset(addressSlot);
 			
 			//if worker does not have all the resou
-			SendRequest(msqid,&msg,address, offset, action);
+			SendRequest(msqid,&msg,address,  action);
 			
 			totalRequests++;
 			//get response
@@ -179,10 +179,9 @@ void GetResponse(int msqid, msgbuffer *msg)
 
 	return;
 }
-void SendRequest(int msqid, msgbuffer *msg,int address,int offset, int requestAction)
+void SendRequest(int msqid, msgbuffer *msg,int address, int requestAction)
 {//send amount of time worker ran and  amount of time worker wait to access external resource (if it doesnt, eventWaitTime = 0)
 	msg->address = address;
-	msg->offset = offset;
 	msg->action = requestAction;
 	msg->mtype = 1;
 	msg->workerID = getpid();
