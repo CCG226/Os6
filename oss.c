@@ -90,7 +90,7 @@ int main(int argc, char** argv)
 	shm_ClockId = StartSystemClock(&OS_Clock);
 
 	//handles how os laumches, tracks, and times workers
-	WorkerHandler(workerAmount, simultaneousLimit, timeInterval,logFileName, OS_Clock, processTable, frameTable);
+	WorkerHandler(workerAmount, simultaneousLimit, timeInterval,logFileName, OS_Clock, processTable, frameTable, waitList);
 	//removes system clock from shared mem
 	StopSystemClock(OS_Clock ,shm_ClockId);
 	printf("\n\n\n");
@@ -295,31 +295,61 @@ int ValidateInput(int workerAmount, int workerSimLimit, int timeInterval, char* 
 
 }
 
-int WakeUpProcess(struct PCB table[], int msqid)
-{//wake up processes if their resource is available
-	int wokenUp = 0;
-/*	msgbuffer msg;
-	for(int i = 0; i < TABLE_SIZE;i++)
+void BlockWorker(struct PCB table[], frame waitList[],int pageAddress,int workerID, int dirtBit)
+{
+
+UpdateWorkerStateInProcessTable(table, workerID, STATE_BLOCKED);
+
+for(int i = 0; i < WAIT_TABLE_SIZE;i++)
+{
+if(waitList[i].occupied == 0)
+{
+ AddToQueue(i, pageAddress, workerID, waitList, dirtBit);
+ break;
+}	
+
+}
+}
+int MoveQueueHead(int oldHead, int size)
+{
+int newHead = oldHead;	
+if(oldHead == (size - 1))
+{
+newHead = 0;
+}
+else
+{
+newHead++;
+}
+
+return newHead;
+}
+
+frame FreeBlockedProcessRequest(frame table[], int* head)
+{
+ frame selected;
+
+	for(int i = 0; i < WAIT_TABLE_SIZE;i++)
 	{
-		if(table[i].state == STATE_BLOCKED)
-		{
-			if(resourceDescriptor[table[i].lastResourceClaim] > 0)
-			{
-				wokenUp++;	 
+	  if(table[*(head)].occupied == 0)
+	  {
+	    *(head) = MoveQueueHead(*(head), WAIT_TABLE_SIZE);
 
-				ResponseHandler(msqid,table[i].pid, &msg);
+	  }
+	  else
+         {
+	  
+int HIndex = *(head);
+selected = table[HIndex];
+RemoveFrame(HIndex, table[HIndex].pageAddress, table[HIndex].owner, table);
+         return selected;
+	 
 
-				UpdateResourceDescriptor(resourceDescriptor, table[i].lastResourceClaim, 0);
-
-				UpdateAllocationTable(allocTable, table[i].lastResourceClaim, i, 0);
-
-				UpdateWorkerStateInProcessTable(table, table[i].pid, STATE_RUNNING);
-			}
-		}
+	 }		  
 
 
-	}*/
-	return wokenUp;
+	}
+ return selected;
 }
 int LogMessage(FILE* logger, const char* format,...)
 {//logging to file
@@ -371,8 +401,8 @@ int Pager(struct PCB processTable[],frame frameTable[],int address,int workerID)
  {
   if(frameTable[i].occupied == 0)
   {
-   UpdateFrameTable(i, address, workerID, frameTable); 	  
-   UpdateProcessPageTable(GetWorkerIndexFromProcessTable(processTable,workerID),processTable,address, MEM_SLOT_FILLED); 
+   AddFrame(i, address, workerID, frameTable); 	  
+   UpdateProcessPageTable(GetWorkerIndexFromProcessTable(processTable,workerID),processTable,address, MEM_SLOT_ACTIVE); 
    return 0;	   	   
   }
 
@@ -393,11 +423,26 @@ for(int i = 0; i < PAGE_TABLE_SIZE;i++)
 }
 
 }
-void UpdateFrameTable(int frameIndex, int pageAddress, int workerID, frame table[])
+void RemoveFrame(int frameIndex, int pageAddress, int workerID, frame table[])
+{
+
+table[frameIndex].occupied = 0;
+table[frameIndex].pageAddress = -1;
+table[frameIndex].owner = 0;
+table[frameIndex].dirtyBit = 0;
+}
+void AddFrame(int frameIndex, int pageAddress, int workerID, frame table[])
 {
 table[frameIndex].occupied = 1;
 table[frameIndex].pageAddress = pageAddress;
 table[frameIndex].owner = workerID;
+}
+void AddToQueue(int frameIndex, int pageAddress, int workerID, frame table[], int dirtBit)
+{
+table[frameIndex].occupied = 1;
+table[frameIndex].pageAddress = pageAddress;
+table[frameIndex].owner = workerID;
+table[frameIndex].dirtyBit = dirtBit;
 }
 int AlterDirtyBit(frame frameTable[],int dirtyBit,int workerID,int pageAddress)
 {
@@ -419,45 +464,137 @@ for(int i = 0; i < FRAME_TABLE_SIZE;i++)
 }
 return 1;
 }
-int MoveFrameHead(int oldHead)
-{
-int newHead = oldHead;	
-if(oldHead == (FRAME_TABLE_SIZE - 1))
-{
-newHead = 0;
-}
-else
-{
-newHead++;
-}
 
-return newHead;
-}
-void SwapOut(frame frameTable[], int* head)
+void SwapOutFrame(frame frameTable[],struct PCB processTable[], int* head)
 {
 for(int i = 0; i < FRAME_TABLE_SIZE;i++)
 {
 if(frameTable[*(head)].occupied == 0)
 {
- *(head) = MoveFrameHead(*(head));
+ *(head) = MoveQueueHead(*(head), FRAME_TABLE_SIZE);
 
 }
 else
 {
-int index = *(head);	
-frameTable[index].occupied = 0;
- frameTable[index].pageAddress = -1;
- frameTable[index].owner = 0;
-frameTable[index].dirtyBit = 0;
+int HIndex = *(head);
+
+UpdateProcessPageTable(GetWorkerIndexFromProcessTable(processTable, frameTable[HIndex].owner), processTable, frameTable[HIndex].pageAddress, MEM_SLOT_EMPTY);
+RemoveFrame(HIndex, frameTable[HIndex].pageAddress, frameTable[HIndex].owner, frameTable);
 break;
 
 }
 }
-*(head) = MoveFrameHead(*(head));
+*(head) = MoveQueueHead(*(head), FRAME_TABLE_SIZE);
 
 }
+void CleanPageTable(int workerID, struct PCB processTable[])
+{
+int workerIndex = GetWorkerIndexFromProcessTable(processTable, workerID);
 
-void WorkerHandler(int workerAmount, int workerSimLimit,int timeInterval, char* logFile, struct Sys_Time* OsClock, struct PCB processTable[], frame frameTable[])
+for(int i = 0; i < PAGE_TABLE_SIZE;i++)
+{
+if(processTable[workerIndex].page[i] == MEM_SLOT_ACTIVE)
+{
+processTable[workerIndex].page[i] = MEM_SLOT_EMPTY;
+}
+}
+
+}
+int EmptyWorkerFrames(int workerID, frame frameTable[])
+{
+ int amountEmptied = 0;	
+ for(int i = 0; i < FRAME_TABLE_SIZE;i++)
+ {
+  if(frameTable[i].owner == workerID)
+  {
+    amountEmptied++;
+    RemoveFrame(i, frameTable[i].pageAddress, workerID, frameTable);	  
+  }
+
+ }
+return amountEmptied; 
+}	
+int IsBlockedQueueEmpty(frame waitList[])
+{
+int count = 0;
+
+for(int i = 0; i < WAIT_TABLE_SIZE;i++)
+{
+ if(waitList[i].occupied == 0)
+ {
+ count++;
+ }
+}
+if(count == WAIT_TABLE_SIZE)
+{
+return 1;
+}
+return 0;
+}
+int IsBlockedQueueFull(frame waitList[], int simLimit)
+{
+int count = 0;
+
+for(int i = 0; i < WAIT_TABLE_SIZE;i++)
+{
+ if(waitList[i].occupied == 1)
+ {
+ count++;
+ }
+}
+if(count == simLimit)
+{
+return 1;
+}
+return 0;
+}
+int SwapInFrames(frame frameTable[],frame waitList[],int* waitListHead, int amountEmpty, int msqid, msgbuffer* msg, struct PCB processTable[])
+{
+int dirtBitAlter = 0;
+for(int i = 0; i < amountEmpty;i++)
+{
+ if(IsBlockedQueueEmpty(waitList) == 1)
+ {
+ break;
+ }
+
+frame selected = FreeBlockedProcessRequest(waitList, waitListHead);
+
+ResponseHandler(msqid, selected.owner, msg);
+
+UpdateWorkerStateInProcessTable(processTable, selected.owner, STATE_RUNNING);
+
+AddFrame(FindEmptyFrame(frameTable),selected.pageAddress, selected.owner, frameTable);
+
+UpdateProcessPageTable(GetWorkerIndexFromProcessTable(processTable, selected.owner),processTable, selected.pageAddress, MEM_SLOT_EMPTY);
+
+int didAlterOccur = AlterDirtyBit(frameTable, selected.dirtyBit, selected.owner,selected.pageAddress);	
+		
+if(didAlterOccur == 1)
+{
+dirtBitAlter++;
+}		
+//add frame to frame table,
+//send message to worker
+//update worker state to running in pcb
+//update process page table
+}
+return dirtBitAlter;
+}
+int FindEmptyFrame(frame table[])
+{
+for(int i = 0; i < FRAME_TABLE_SIZE;i++)
+{
+if(table[i].occupied == 0)
+{
+return i;
+}
+
+}
+printf("Error Swapping In New Frame\n");
+exit(1);
+}
+void WorkerHandler(int workerAmount, int workerSimLimit,int timeInterval, char* logFile, struct Sys_Time* OsClock, struct PCB processTable[], frame frameTable[], frame waitList[])
 {	//access logfile
 	FILE *logger = fopen(logFile, "w");
 	//get id of message queue after creating it
@@ -522,17 +659,22 @@ void WorkerHandler(int workerAmount, int workerSimLimit,int timeInterval, char* 
 		if(CanEvent(OsClock->seconds,OsClock->nanoseconds, timeToOutputSec, timeToOutputNano) == 1)
 		{
 					
-		//	PrintProcessTable(processTable, OsClock->seconds, OsClock->nanoseconds,logger);
+			PrintProcessTable(processTable, OsClock->seconds, OsClock->nanoseconds,logger);
 	
-			PrintFrameTable(0,frameTable,  OsClock->seconds, OsClock->nanoseconds,logger);
+			PrintFrameTable(frameTableHead,frameTable,  OsClock->seconds, OsClock->nanoseconds,logger);
+
+		        PrintWaitListTable(waitListHead,waitList,  OsClock->seconds, OsClock->nanoseconds,logger);
+
 
 			GenerateTimeToEvent(OsClock->seconds, OsClock->nanoseconds,HALF_SEC,0, &timeToOutputSec, &timeToOutputNano);
 		}
 
 		if(CanEvent(OsClock->seconds, OsClock->nanoseconds, timeToFullFillSec, timeToFullFillNano) == 1)
 		{
-			SwapOut(frameTable, &frameTableHead);
-			
+			SwapOutFrame(frameTable,processTable, &frameTableHead);
+	
+			RunSystemClock(OsClock, 500000);
+		
 			GenerateTimeToEvent(OsClock->seconds, OsClock->nanoseconds,FULLFILLMENT_TIME,0,&timeToFullFillSec, &timeToFullFillNano); 
 
 		}
@@ -554,18 +696,25 @@ void WorkerHandler(int workerAmount, int workerSimLimit,int timeInterval, char* 
 		{
 	
 	  
-		RunSystemClock(OsClock, 500000);
+		RunSystemClock(OsClock, 5000);
 
 		}
+
+		ResponseHandler(msqid, msg.workerID, &msg);
 
 		}
 		if(pageFault == 1)
 		{
-		//block
+		 BlockWorker(processTable, waitList, pageAddress, msg.workerID, msg.action);
+
+ 
+	//	 ResponseHandler(msqid, msg.workerID, &msg);
+
+	 	 RunSystemClock(OsClock, 500000);
+
 		}
 	//	printf("page fault %d\n",pageFault);	
-		ResponseHandler(msqid, msg.workerID, &msg);
-	
+
 	
 
 			
@@ -578,7 +727,24 @@ void WorkerHandler(int workerAmount, int workerSimLimit,int timeInterval, char* 
 		{
 			workersComplete++;
 
-		
+			CleanPageTable(workerFinishedId, processTable);
+			
+			int amountEmpty = EmptyWorkerFrames(workerFinishedId, frameTable);
+                        
+			
+	int didAlterOccur = SwapInFrames(frameTable, waitList,&waitListHead, amountEmpty, msqid, &msg, processTable);
+ 		if(didAlterOccur > 0)
+		{
+	
+	  
+		RunSystemClock(OsClock, 5000 * didAlterOccur);
+
+		}
+
+
+			RunSystemClock(OsClock, 5000000);
+
+
 			LogMessage(logger, "Process %d terminated naturally\n",workerFinishedId);
 		
 
@@ -587,12 +753,11 @@ void WorkerHandler(int workerAmount, int workerSimLimit,int timeInterval, char* 
 			workersInSystem--;
 
 		}		
-		if(AreAllWorkersBlocked(processTable) == 1)
+		if(IsBlockedQueueFull(waitList, workerSimLimit) == 1)
 		{
 		 FastForwardClock(OsClock,timeToFullFillSec, timeToFullFillNano); 
 		}
 
-	       	RunSystemClock(OsClock, 500000);
 	}
 
 	Report(processTable);
@@ -813,6 +978,22 @@ printf("    Occupied    Address     Owner    DirtyBit \n");
   LogMessage(logger,"%d       %d        %d       %d       %d\n", i, frameTable[i].occupied, frameTable[i].pageAddress, frameTable[i].owner, frameTable[i].dirtyBit);
  
  printf("%d       %d        %d       %d       %d\n", i, frameTable[i].occupied, frameTable[i].pageAddress, frameTable[i].owner, frameTable[i].dirtyBit);
+ }
+}
+void PrintWaitListTable(int head, frame waitList[], int curTimeSeconds, int curTimeNanoseconds, FILE* logger)
+{
+ LogMessage(logger,"Current memory layout at time %d:%d is:\n", curTimeSeconds, curTimeNanoseconds);
+  LogMessage(logger,"Current head: %d\n", head);
+  LogMessage(logger,"    Occupied    Address     Owner    DirtyBit \n");
+
+ printf("Current memory layout at time %d:%d is:\n", curTimeSeconds, curTimeNanoseconds);
+ printf("Current head: %d\n", head);
+printf("    Occupied    Address     Owner    DirtyBit \n");
+ for(int i = 0 ; i < WAIT_TABLE_SIZE; i++)
+ {
+  LogMessage(logger,"%d       %d        %d       %d       %d\n", i, waitList[i].occupied, waitList[i].pageAddress, waitList[i].owner, waitList[i].dirtyBit);
+ 
+ printf("%d       %d        %d       %d       %d\n", i, waitList[i].occupied, waitList[i].pageAddress, waitList[i].owner, waitList[i].dirtyBit);
  }
 }
 //pirnt table

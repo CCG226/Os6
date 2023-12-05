@@ -30,7 +30,7 @@ const int WAIT_TABLE_SIZE = 20;
 
 const int MEM_SLOT_EMPTY = 0;
 
-const int MEM_SLOT_FILLED = 1;
+const int MEM_SLOT_ACTIVE = 1;
 
 //represents shared memory Operating system clock
 struct Sys_Time {
@@ -61,9 +61,23 @@ typedef struct frame {
 	int dirtyBit;
 } frame;
 
-int MoveFrameHead(int oldHead);
+void AddToQueue(int frameIndex, int pageAddress, int workerID, frame table[], int dirtBit);
 
-void SwapOut(frame frameTable[], int* head);
+void BlockWorker(struct PCB table[], frame waitList[],int pageAddress,int workerID, int dirtBit);
+
+void PrintWaitListTable(int head, frame waitList[], int curTimeSeconds, int curTimeNanoseconds, FILE* logger);
+
+int IsBlockedQueueFull(frame waitList[], int simLimit);
+
+int FindEmptyFrame(frame table[]);
+
+int IsBlockedQueueEmpty(frame waitList[]);
+
+int SwapInFrames(frame frameTable[],frame waitList[],int* waitListHead, int amountEmpty, int msqid, msgbuffer* msg, struct PCB processTable[]);
+
+int MoveQueueHead(int oldHead, int size);
+
+void SwapOutFrame(frame frameTable[],struct PCB processTable[], int* head);
 
 void BuildBlockedQueue(frame waitList[]);
 
@@ -77,10 +91,17 @@ int Pager(struct PCB processTable[],frame frameTable[],int address,int workerID)
 
 void UpdateProcessPageTable(int workerIndex, struct PCB table[],int pageAddress, int memorySlotState);
 
-void UpdateFrameTable(int frameIndex, int pageAddress, int workerID, frame table[]);
+void RemoveFrame(int frameIndex, int pageAddress, int workerID, frame table[]);
+
+void AddFrame(int frameIndex, int pageAddress, int workerID, frame table[]);
+
+void CleanPageTable(int workerID, struct PCB processTable[]);
+
+int EmptyWorkerFrames(int workerID, frame frameTable[]);
 
 void PrintFrameTable(int head, frame frameTable[], int curTimeSeconds, int curTimeNanoseconds, FILE* logger);
 
+frame FreeBlockedProcessRequest(frame table[], int* head);
 
 int AlterDirtyBit(frame frameTable[],int dirtyBit,int workerID, int pageAddress);
 
@@ -116,7 +137,7 @@ void FastForwardClock(struct Sys_Time *Clock,int ffSec,int ffNano);
 //updates process table info
 //handles response messages from workers after they run
 //workAmount = n value, workerSimLimit = -s value, timeInterval = -t value, logFile = -f value, OsClock = shared memory clock, table is process pcb table 
-void WorkerHandler(int workerAmount, int workerSimLimit, int timeInterval,char* logFile, struct Sys_Time* OsClock, struct PCB table[], frame frameTable[]);
+void WorkerHandler(int workerAmount, int workerSimLimit, int timeInterval,char* logFile, struct Sys_Time* OsClock, struct PCB table[], frame frameTable[],frame waitList[]);
 //logs a particular message to logfile 
 int LogMessage(FILE* logger, const char* format,...);
 
@@ -152,7 +173,9 @@ void DestructMsgQueue(int msqid);
 int AreAllWorkersBlocked(struct PCB table[]);
 
 int RequestHandler(int msqid, msgbuffer *msg);
+
 void ResponseHandler(int msqid, int workerId, msgbuffer *msg);
+
 void GenerateTimeToEvent(int currentSecond,int currentNano,int timeIntervalNano,int timeIntervalSec, int* eventSec, int* eventNano);
 
 int WakeUpProcess(struct PCB table[], int msqid);
