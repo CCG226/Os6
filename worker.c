@@ -22,6 +22,7 @@ int main(int argc, char** argv)
 
 	return EXIT_SUCCESS;
 }
+//creates message queue
 int AccessMsgQueue()
 {
 	//access message queue create by workinh using key constant
@@ -33,6 +34,7 @@ int AccessMsgQueue()
 	}
 	return msqid;
 }
+//cretes access to system clock
 struct Sys_Time* AccessSystemTime()
 {//access system clock from shared memory (read-only(
 	int shm_id = shmget(SYS_TIME_SHARED_MEMORY_KEY, sizeof(struct Sys_Time), 0444);
@@ -45,6 +47,7 @@ struct Sys_Time* AccessSystemTime()
 	return (struct Sys_Time*)shmat(shm_id, NULL, 0);
 
 }
+//disconeects from ahred clock memory
 void DisposeAccessToShm(struct Sys_Time* clock)
 {//detach system clock from shared memory
 	if(shmdt(clock) == -1)
@@ -55,52 +58,53 @@ void DisposeAccessToShm(struct Sys_Time* clock)
 
 }
 
-//workers console print task
+//workers task
 void TaskHandler(int workerResources[])
 {
-
+	//get access to msg queue and clock
 	int msqid = AccessMsgQueue();
 
 	struct Sys_Time* Clock = AccessSystemTime();
 
 	//determines of worker can keep working, if 0 worker must terminate
 	int status = RUNNING;
+
 	msgbuffer msg;
-
-
+	//trackes total amount of requests worker makes
 	int totalRequests = 0;
-
+	//generate a request goal, if goal is reached worker considers terminating
 	int requestGoal = GenerateNextRequestGoal();
 	//while status is NOT 0, keep working
 	while(status != TERMINATING)
 	{
-	
-			//by defualt release
-			int action = MemoryAction();
 
-			int addressSlot = GetAddress();
-			
-			int address = GetOffset(addressSlot);
-			
-			//if worker does not have all the resou
-			SendRequest(msqid,&msg,address,  action);
-			
-			totalRequests++;
-			//get response
-			 GetResponse(msqid, &msg);
+		//determine to request read or write to address
+		int action = MemoryAction();
+
+		int addressSlot = GetAddress();
+		//generates specifc address reques	
+		int address = GetOffset(addressSlot);
+
+		//send request to os for page address
+		SendRequest(msqid,&msg,address,  action);
+
+		totalRequests++;
+		//get response
+		GetResponse(msqid, &msg);
 
 
-		
-			if(TerminateEvent(totalRequests, &requestGoal) == 1)
-			{
-				status = TERMINATING;	   
-			}	   
-			 
+
+		if(TerminateEvent(totalRequests, &requestGoal) == 1)
+		{//determines if worker should quit after reaching its goal number of amount of requests to os
+			status = TERMINATING;	   
+		}	   
+
 	}
 
 	DisposeAccessToShm(Clock);
 
 }
+//calculate time to next worker event
 void GenerateTimeToEvent(int currentSecond,int currentNano,int timeIntervalNano,int timeIntervalSec, int* eventSec, int* eventNano)
 {//adds timeInterval time to current time (which is system clock) and stores result in event time ptr variables to be used to know when a particular event will occur on the system clock
 	*(eventSec) = currentSecond + timeIntervalSec;
@@ -114,6 +118,7 @@ void GenerateTimeToEvent(int currentSecond,int currentNano,int timeIntervalNano,
 		*(eventNano) = (currentNano + timeIntervalNano);
 	}
 }
+//check time to see if event time has been passed so we know when to do event
 int CanEvent(int curSec,int curNano,int eventSecMark,int eventNanoMark)
 {
 	if(eventSecMark == curSec && eventNanoMark <= curNano)
@@ -130,42 +135,49 @@ int CanEvent(int curSec,int curNano,int eventSecMark,int eventNanoMark)
 	}
 
 }
+//deciding to terminate
 int ShouldTerminate()
 {//when to terminate
 	int option = (rand() % 100) + 1;
 
-	if(option <= 50)
+	if(option <= 75)
 	{
 		return 1;
 	}
 	return 0;
 }
+//handl checking to see if we should terminate
+////if terminate is 0 dont termiante
+//if termiante is 1 then terminate worker
 int TerminateEvent(int totalAmountOfRequests, int *requestGoal)
 {
-int terminate;	
-if(totalAmountOfRequests < *(requestGoal))
-{
-terminate = 0;
-}
-else
-{
+	int terminate;	
+	if(totalAmountOfRequests < *(requestGoal))
+	{//if we are below request goal dont terminate
+		terminate = 0;
 
-terminate = ShouldTerminate();	
+	}
+	else
+	{
+		//if we are above request randomly decide if we should terminate
+		terminate = ShouldTerminate();	
 
-if(terminate == 0)
-{	
-*(requestGoal) = GenerateNextRequestGoal();
-}
+		if(terminate == 0)
+		{	//if we are not terminating  then generate a new request goal
+			*(requestGoal) = GenerateNextRequestGoal();
+		}
 
+	}
+	return terminate;
 }
-return terminate;
-}
+//generate a goal of every 1000 +/- memory references. if goal is reached decide to terminate
 int GenerateNextRequestGoal()
 {
- int random = (rand() % 100) + 1;
+	int random = (rand() % 100) + 1;
 
-return (900 + random);
+	return (900 + random);
 }
+//get os repsosne
 void GetResponse(int msqid, msgbuffer *msg)
 {
 
@@ -173,12 +185,13 @@ void GetResponse(int msqid, msgbuffer *msg)
 
 	if(msgrcv(msqid, msg, sizeof(msgbuffer), getpid(), 0) == -1)
 	{
-		printf("Worker %d did recieve resource", getpid());
+		//		printf("Worker %d did recieve resource", getpid());
 		exit(1);
 	}
 
 	return;
 }
+//send mesage to os with page address we want, if we want to read or write, and who we are (pid)
 void SendRequest(int msqid, msgbuffer *msg,int address, int requestAction)
 {//send amount of time worker ran and  amount of time worker wait to access external resource (if it doesnt, eventWaitTime = 0)
 	msg->address = address;
@@ -192,30 +205,34 @@ void SendRequest(int msqid, msgbuffer *msg,int address, int requestAction)
 	}
 
 }
-
+//decide to read or write
+//read = 60%
+//write = 40%
 int MemoryAction()
 {//wdevide to claim or release
 	int option = (rand() % 100) + 1;
 
-if(option <= 40)
-{
-   return 1;
-}
+	if(option <= 40)
+	{
+		return 1;
+	}
 	return 0;
 }
+//get page address block 0 -31 at random
 int GetAddress()
 {
 
-return (rand() % 32);
+	return (rand() % 32);
 
 }
+//calculate specifc address in memmory block to request
 int GetOffset(int addr)
 {
-int loc = addr * 1024;
+	int loc = addr * 1024;
 
-int randOffset = (rand() % 1024);
+	int randOffset = (rand() % 1024);
 
-return (loc + randOffset);
+	return (loc + randOffset);
 
 }
 

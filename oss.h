@@ -61,6 +61,8 @@ typedef struct frame {
 	int dirtyBit;
 } frame;
 
+void Report(int curSec, int totalMemAcc, int totalPageFaults);
+
 void AddToQueue(int frameIndex, int pageAddress, int workerID, frame table[], int dirtBit);
 
 void BlockWorker(struct PCB table[], frame waitList[],int pageAddress,int workerID, int dirtBit);
@@ -73,11 +75,11 @@ int FindEmptyFrame(frame table[]);
 
 int IsBlockedQueueEmpty(frame waitList[]);
 
-int SwapInFrames(frame frameTable[],frame waitList[],int* waitListHead, int amountEmpty, int msqid, msgbuffer* msg, struct PCB processTable[]);
+int SwapInFrames(frame frameTable[],frame waitList[],int* waitListHead, int amountEmpty, int msqid, msgbuffer* msg, struct PCB processTable[], FILE* logger);
 
 int MoveQueueHead(int oldHead, int size);
 
-void SwapOutFrame(frame frameTable[],struct PCB processTable[], int* head);
+void SwapOutFrame(frame frameTable[],struct PCB processTable[], int* head, FILE* logger);
 
 void BuildBlockedQueue(frame waitList[]);
 
@@ -170,8 +172,6 @@ int ConstructMsgQueue();
 
 void DestructMsgQueue(int msqid);
 
-int AreAllWorkersBlocked(struct PCB table[]);
-
 int RequestHandler(int msqid, msgbuffer *msg);
 
 void ResponseHandler(int msqid, int workerId, msgbuffer *msg);
@@ -179,6 +179,4 @@ void ResponseHandler(int msqid, int workerId, msgbuffer *msg);
 void GenerateTimeToEvent(int currentSecond,int currentNano,int timeIntervalNano,int timeIntervalSec, int* eventSec, int* eventNano);
 
 int WakeUpProcess(struct PCB table[], int msqid);
-
-void Report(struct PCB table[]);
 
